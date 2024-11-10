@@ -1,0 +1,181 @@
+!apt-get update # Update package list
+!apt-get install -y wget curl unzip
+!wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+!dpkg -i google-chrome-stable_current_amd64.deb
+!apt --fix-broken install -y
+!google-chrome-stable --version # Check installed version
+
+# Import necessary libraries
+import csv
+import os
+import re
+import glob
+import pandas as pd
+from datetime import datetime, timedelta
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from bs4 import BeautifulSoup
+import time
+from datetime import datetime
+
+# Set up Selenium WebDriver options for headless browsing (without opening a window)
+options = Options()
+options.add_argument("--headless")  # Run in headless mode (no GUI)
+options.add_argument("--no-sandbox")  # Add this flag if you are running in an environment without a display
+options.add_argument("--disable-dev-shm-usage")  # Overcome limited shared memory issues
+options.add_argument("--remote-debugging-port=9222")  # Enable remote debugging (may help resolve errors)
+options.add_argument("--disable-gpu")  # Disable GPU acceleration in headless mode
+options.add_argument("--start-maximized")  # Start Chrome maximized (optional, sometimes helps)
+options.add_argument('--disable-software-rasterizer')  # Disable software rasterizer to avoid GPU-related issues
+
+# Set up WebDriver using webdriver_manager to handle ChromeDriver installation
+service = Service(ChromeDriverManager().install())
+
+# Initialize the Selenium WebDriver with the options and service
+driver = webdriver.Chrome(service=service, options=options)
+driver.set_page_load_timeout(60)
+
+def get_date_range(last_date=None):
+    today = datetime.today()
+    
+    if last_date and pd.notnull(last_date):
+        # Attempt parsing last_date with multiple formats
+        try:
+            last_date = datetime.strptime(last_date, '%m/%d/%y')
+        except ValueError:
+            try:
+                last_date = datetime.strptime(last_date, '%m/%d/%Y')
+            except ValueError:
+                print(f"Warning: Unable to parse date '{last_date}' in recognized formats.")
+                return None, None  # Returning None if date parsing fails
+
+        # Add one day to the parsed last_date to get the start_date
+        start_date = last_date + timedelta(days=1)
+    else:
+        # Default to 10 years ago if no last_date is provided
+        start_date = today - timedelta(days=365 * 10)
+
+    return start_date.strftime('%m/%d/%y'), today.strftime('%m/%d/%y')
+
+def update_historical_data(symbol, date, close_price, volume):
+    filename = f"historical_data_{symbol}.csv"
+    if os.path.exists(filename):
+        existing_data = pd.read_csv(filename, dtype=str)  # Read as strings
+        last_date = existing_data['Date'].max()  # Get the max date as string
+        new_row = pd.DataFrame([[date, close_price, volume]], columns=['Date', 'Close_Price', 'Volume'])
+        
+        # Append the new row without modifying existing data
+        merged_data = pd.concat([existing_data, new_row]).drop_duplicates(subset=['Date']).sort_values(by='Date')
+        merged_data.to_csv(filename, index=False)
+    else:
+        # If file doesn't exist, create a new one with the header
+        with open(filename, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['Date', 'Close_Price', 'Volume'])
+            writer.writerow([date, close_price, volume])
+
+    
+
+# Go to the main page with the issuer symbols
+url = 'https://www.mse.mk/en/stats/symbolhistory/TLE'
+driver.get(url)
+
+# Wait for the page to fully load
+time.sleep(5)
+
+# Now, let's scrape the dropdown or table with the stock symbols
+symbols = []
+
+# Example: Find the dropdown list of stock symbols by inspecting the page
+dropdown = driver.find_element(By.ID, 'Code')
+
+options = dropdown.find_elements(By.TAG_NAME, 'option')
+for option in options:
+    symbol = option.get_attribute('value')
+    if symbol:
+        symbols.append(symbol)
+
+# Print out all the symbols found before filtering
+print("All symbols:", symbols)
+
+# Filter out symbols that contain numbers or any characters that are not letters or spaces
+filtered_symbols = [symbol for symbol in symbols if re.match(r'^[A-Za-z\s]+$', symbol)]
+
+# Print out the filtered symbols
+print("Filtered symbols:", filtered_symbols)
+
+# Get the date range for the past 10 years
+start_date, end_date = get_date_range()
+
+# Now, loop through each symbol and scrape the historical data page for it
+for symbol in filtered_symbols:
+    filename = f"historical_data_{symbol}.csv"
+    last_date = None
+    
+    # Check if existing data file for symbol
+    if os.path.exists(filename):
+        existing_data = pd.read_csv(filename, dtype=str)  # Read as strings
+        last_date = existing_data['Date'].max()
+        
+    start_date, end_date = get_date_range(last_date)
+    # Build the URL dynamically for each symbol
+    data_url = f'https://www.mse.mk/en/stats/symbolhistory/{symbol}'
+    time.sleep(10) 
+    driver.get(data_url)
+    
+    # Wait for the page to load
+    time.sleep(5)
+
+    # Find the "From" and "To" date input fields and set the range for the past 10 years
+    from_date_input = driver.find_element(By.ID, 'FromDate')  # Adjust with correct ID or class
+    to_date_input = driver.find_element(By.ID, 'ToDate')  # Adjust with correct ID or class
+    
+    # Clear the current value and set the new date range
+    from_date_input.clear()
+    from_date_input.send_keys(start_date)
+    to_date_input.clear()
+    to_date_input.send_keys(end_date)
+    
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    wait = WebDriverWait(driver, 30)
+    # Click the "Submit" or "Search" button to apply the date range
+    search_button = driver.find_element(By.CLASS_NAME, 'btn-primary-sm')  # Adjust with correct class
+    search_button.click()
+
+    # Wait for the page to reload with the historical data
+    time.sleep(20)
+
+    # Get the page source after JavaScript has been executed
+    soup = BeautifulSoup(driver.page_source, 'html.parser')
+    
+    # Find the table containing historical data
+    table = soup.find('div', {'id': 'resultsTable_wrapper'})  # Adjust the class or tag as necessary
+    
+    # Iterate over the rows and extract data
+    if table:
+        for row in table.find_all('tr')[1:]:  # Skip the header row
+            columns = row.find_all('td')
+            if len(columns) > 2:  # Ensure there are enough columns
+                date = columns[0].text.strip()
+                close_price = columns[1].text.strip()
+                volume = columns[2].text.strip()
+                update_historical_data(symbol, date, close_price, volume)
+                print(f"{symbol} | {date} | {close_price} | {volume}")
+    else:
+        print(f"No historical data found for {symbol}")
+
+def merge_csv_files(output_filename="combined_historical_data.csv"):
+    all_files = glob.glob("historical_data_*.csv")  # Get all CSV files
+    combined_data = pd.concat((pd.read_csv(f) for f in all_files), ignore_index=True)
+    combined_data.to_csv(output_filename, index=False)
+    print(f"All data has been merged into {output_filename}")
+
+# Call the merge function after all data has been scraped and saved
+merge_csv_files()
+
+# Close the browser once done
+driver.quit()
