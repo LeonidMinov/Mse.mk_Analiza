@@ -1,0 +1,166 @@
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+import csv
+
+# --- Function to get dynamic date ranges based on the current date ---
+def get_dynamic_date_range(years_ago):
+    current_date = datetime.now()
+    end_date = current_date
+    start_date = end_date - timedelta(days=365)
+
+    date_ranges = []
+    for _ in range(years_ago):
+        date_ranges.append((start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')))
+        end_date = start_date - timedelta(days=1)
+        start_date = end_date - timedelta(days=365)
+
+    return date_ranges
+
+# --- Function to scrape data for a specific date range (from, to) ---
+def scrape_data_for_date_range(option_value, base_url, from_date, to_date):
+    option_url = f"{base_url}{option_value}?start_date={from_date}&end_date={to_date}"
+    print(f"Scraping data for {option_url} from {from_date} to {to_date}")
+
+    # Fetch the page content using requests
+    response = requests.get(option_url)
+    if response.status_code != 200:
+        print(f"Failed to retrieve data for {option_url}. Status code: {response.status_code}")
+        return {"option_value": option_value, "headers": [], "data": []}
+
+    # Parse the page content with BeautifulSoup
+    soup = BeautifulSoup(response.content, 'html.parser')
+
+    # Try to find the table in the page
+    table = soup.find('table')
+    if table:
+        rows = table.find_all('tr')
+        table_data = []
+        table_headers = []
+
+        for idx, row in enumerate(rows):
+            columns = row.find_all('td')
+            if columns:
+                if idx == 0:  # Header row
+                    table_headers = [col.text.strip() for col in columns]
+                else:  # Data rows
+                    table_data.append([col.text.strip() for col in columns])
+
+        # Print the data for the current date range
+        print(f"Headers: {table_headers}")
+        print(f"Data for {option_value} from {from_date} to {to_date}:")
+        for row in table_data:
+            print(row)
+
+        return {"option_value": option_value, "headers": table_headers, "data": table_data}
+    else:
+        print(f"No table found for the date range: {from_date} to {to_date}")
+        return {"option_value": option_value, "headers": [], "data": []}
+
+# --- Function to scrape and merge data for three years ---
+def scrape_and_merge_data_for_three_years(option_value, base_url):
+    all_data = []
+    all_headers = []
+
+    # Get the dynamic date ranges (3 years ago, 2 years ago, 1 year ago)
+    date_ranges = get_dynamic_date_range(3)  # Scrape for 3 years
+
+    for from_date, to_date in date_ranges:
+        data_for_year = scrape_data_for_date_range(option_value, base_url, from_date, to_date)
+
+        if data_for_year['data']:
+            all_data.extend(data_for_year['data'])
+            if not all_headers and data_for_year['headers']:
+                all_headers = data_for_year['headers']
+
+    # Deduplicate the data
+    deduplicated_data = []
+    seen_rows = set()
+
+    for row in all_data:
+        row_tuple = tuple(row)
+        if row_tuple not in seen_rows:
+            seen_rows.add(row_tuple)
+            deduplicated_data.append(row)
+
+    return {"option_value": option_value, "headers": all_headers, "data": deduplicated_data}
+
+# --- Function to scrape and filter dropdown options ---
+def filter_1(url, csv_filename):
+    response = requests.get(url)
+    if response.status_code != 200:
+        print(f"Failed to retrieve dropdown options. Status code: {response.status_code}")
+        return []
+
+    # Parse the page content with BeautifulSoup
+    soup = BeautifulSoup(response.content, 'html.parser')
+
+    # Find the dropdown (assuming it is a <select> element)
+    dropdown = soup.find('select')
+    if not dropdown:
+        print(f"No dropdown found on the page.")
+        return []
+
+    options = dropdown.find_all('option')
+    # Filter options without numbers in their value
+    filtered_options = [{'text': option.text.strip(), 'value': option.get('value')} for option in options if not any(char.isdigit() for char in option.get('value'))]
+
+    # Save filtered options to CSV
+    with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Option Text", "Option Value"])
+        for option in filtered_options:
+            writer.writerow([option['text'], option['value']])
+
+    print(f"Filtered options saved to '{csv_filename}'")
+    return filtered_options
+
+# --- Putting it all together (Pipe and Filter Architecture) ---
+def run_pipeline(url, csv_filename, base_url, output_filename):
+    # Step 1: Filter 1 - Scrape dropdown options and save them to CSV
+    print("Running filter 1...")
+    filtered_options = filter_1(url, csv_filename)
+
+    # Step 2: Scrape data for all options
+    print("\nRunning filter 2 (Scraping)...")
+    scraped_data = []
+
+    for option in filtered_options:
+        data = scrape_and_merge_data_for_three_years(option['value'], base_url)
+        if data['data']:
+            scraped_data.append(data)
+
+    # Step 3: Save the scraped data to a CSV file with 9 columns per row
+    if output_filename:
+        print(f"\nSaving scraped data to {output_filename}...")
+        with open(output_filename, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+
+            for option_data in scraped_data:
+                # Write the option name as a header
+                writer.writerow([f"Data for: {option_data['option_value']}"])
+
+                # Ensure headers have exactly 9 columns
+                headers = option_data['headers'] + [''] * (9 - len(option_data['headers']))
+                writer.writerow(headers)
+
+                for row in option_data['data']:
+                    # Ensure each row has exactly 9 columns by padding with empty strings if needed
+                    padded_row = row + [''] * (9 - len(row))  # Pad to 9 columns
+                    writer.writerow(padded_row)
+        print(f"Scraped data saved to '{output_filename}'")
+
+        # Step 4: Print out the saved CSV file data
+        print(f"\nPrinting data from '{output_filename}'...")
+        with open(output_filename, 'r', newline='', encoding='utf-8') as csvfile:
+            reader = csv.reader(csvfile)
+            for row in reader:
+                print(row)
+
+# Example usage
+url = 'https://www.mse.mk/en/stats/symbolhistory/FROT'
+csv_filename = 'filtered_options.csv'
+base_url = 'https://www.mse.mk/en/stats/symbolhistory/'
+output_filename = 'merged_scraped_data.csv'
+
+run_pipeline(url, csv_filename, base_url, output_filename)
