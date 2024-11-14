@@ -1,3 +1,5 @@
+!pip install selenium
+!pip install webdriver-manager
 !apt-get update # Update package list
 !apt-get install -y wget curl unzip
 !wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
@@ -5,7 +7,6 @@
 !apt --fix-broken install -y
 !google-chrome-stable --version # Check installed version
 
-# Import necessary libraries
 import csv
 import os
 import re
@@ -18,8 +19,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
-import time
-from datetime import datetime
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # Set up Selenium WebDriver options for headless browsing (without opening a window)
 options = Options()
@@ -36,7 +37,7 @@ service = Service(ChromeDriverManager().install())
 
 # Initialize the Selenium WebDriver with the options and service
 driver = webdriver.Chrome(service=service, options=options)
-driver.set_page_load_timeout(60)
+driver.set_page_load_timeout(10)
 
 def get_date_range(last_date=None):
     today = datetime.today()
@@ -77,21 +78,16 @@ def update_historical_data(symbol, date, close_price, volume):
             writer.writerow(['Date', 'Close_Price', 'Volume'])
             writer.writerow([date, close_price, volume])
 
-    
-
 # Go to the main page with the issuer symbols
 url = 'https://www.mse.mk/en/stats/symbolhistory/TLE'
 driver.get(url)
 
-# Wait for the page to fully load
-time.sleep(5)
+# Wait for the dropdown to be visible (instead of time.sleep)
+wait = WebDriverWait(driver, 20)
+dropdown = wait.until(EC.presence_of_element_located((By.ID, 'Code')))
 
-# Now, let's scrape the dropdown or table with the stock symbols
+# Scrape all the options from the dropdown
 symbols = []
-
-# Example: Find the dropdown list of stock symbols by inspecting the page
-dropdown = driver.find_element(By.ID, 'Code')
-
 options = dropdown.find_elements(By.TAG_NAME, 'option')
 for option in options:
     symbol = option.get_attribute('value')
@@ -121,17 +117,14 @@ for symbol in filtered_symbols:
         last_date = existing_data['Date'].max()
         
     start_date, end_date = get_date_range(last_date)
+    
     # Build the URL dynamically for each symbol
     data_url = f'https://www.mse.mk/en/stats/symbolhistory/{symbol}'
-    time.sleep(10) 
     driver.get(data_url)
     
-    # Wait for the page to load
-    time.sleep(5)
-
-    # Find the "From" and "To" date input fields and set the range for the past 10 years
-    from_date_input = driver.find_element(By.ID, 'FromDate')  # Adjust with correct ID or class
-    to_date_input = driver.find_element(By.ID, 'ToDate')  # Adjust with correct ID or class
+    # Wait for the "From Date" and "To Date" input fields to be present
+    from_date_input = wait.until(EC.presence_of_element_located((By.ID, 'FromDate')))
+    to_date_input = wait.until(EC.presence_of_element_located((By.ID, 'ToDate')))
     
     # Clear the current value and set the new date range
     from_date_input.clear()
@@ -139,21 +132,18 @@ for symbol in filtered_symbols:
     to_date_input.clear()
     to_date_input.send_keys(end_date)
     
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    wait = WebDriverWait(driver, 30)
-    # Click the "Submit" or "Search" button to apply the date range
-    search_button = driver.find_element(By.CLASS_NAME, 'btn-primary-sm')  # Adjust with correct class
+    # Wait for the "Submit" or "Search" button to be clickable before clicking it
+    search_button = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, 'btn-primary-sm')))
     search_button.click()
 
-    # Wait for the page to reload with the historical data
-    time.sleep(20)
-
+    # Wait for the results table to appear after the page reloads
+    results_table = wait.until(EC.presence_of_element_located((By.ID, 'resultsTable_wrapper')))
+    
     # Get the page source after JavaScript has been executed
     soup = BeautifulSoup(driver.page_source, 'html.parser')
     
     # Find the table containing historical data
-    table = soup.find('div', {'id': 'resultsTable_wrapper'})  # Adjust the class or tag as necessary
+    table = soup.find('div', {'id': 'resultsTable_wrapper'})
     
     # Iterate over the rows and extract data
     if table:
