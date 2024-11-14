@@ -41,7 +41,7 @@ driver.set_page_load_timeout(10)
 
 def get_date_range(last_date=None):
     today = datetime.today()
-    
+
     if last_date and pd.notnull(last_date):
         # Attempt parsing last_date with multiple formats
         try:
@@ -61,22 +61,27 @@ def get_date_range(last_date=None):
 
     return start_date.strftime('%m/%d/%y'), today.strftime('%m/%d/%y')
 
-def update_historical_data(symbol, date, close_price, volume):
+def update_historical_data(symbol, row_data, headers):
     filename = f"historical_data_{symbol}.csv"
+    
+    # Check if the file exists
     if os.path.exists(filename):
-        existing_data = pd.read_csv(filename, dtype=str)  # Read as strings
-        last_date = existing_data['Date'].max()  # Get the max date as string
-        new_row = pd.DataFrame([[date, close_price, volume]], columns=['Date', 'Close_Price', 'Volume'])
-        
-        # Append the new row without modifying existing data
-        merged_data = pd.concat([existing_data, new_row]).drop_duplicates(subset=['Date']).sort_values(by='Date')
-        merged_data.to_csv(filename, index=False)
+        try:
+            existing_data = pd.read_csv(filename, dtype=str)  # Read as strings
+            last_date = existing_data['Date'].max()  # Get the max date as string
+        except pd.errors.EmptyDataError:
+            # If file is empty, start a new dataframe
+            existing_data = pd.DataFrame(columns=headers)
+            last_date = None
     else:
-        # If file doesn't exist, create a new one with the header
-        with open(filename, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(['Date', 'Close_Price', 'Volume'])
-            writer.writerow([date, close_price, volume])
+        # If file doesn't exist, create a new empty dataframe
+        existing_data = pd.DataFrame(columns=headers)
+        last_date = None
+    
+    # Append the new row without modifying existing data
+    new_row = pd.DataFrame([row_data], columns=headers)
+    merged_data = pd.concat([existing_data, new_row]).drop_duplicates(subset=['Date']).sort_values(by='Date')
+    merged_data.to_csv(filename, index=False)
 
 # Go to the main page with the issuer symbols
 url = 'https://www.mse.mk/en/stats/symbolhistory/TLE'
@@ -110,51 +115,71 @@ start_date, end_date = get_date_range()
 for symbol in filtered_symbols:
     filename = f"historical_data_{symbol}.csv"
     last_date = None
-    
+
     # Check if existing data file for symbol
     if os.path.exists(filename):
-        existing_data = pd.read_csv(filename, dtype=str)  # Read as strings
-        last_date = existing_data['Date'].max()
-        
+        try:
+            existing_data = pd.read_csv(filename, dtype=str)  # Read as strings
+            last_date = existing_data['Date'].max()
+        except pd.errors.EmptyDataError:
+            # If file is empty, proceed without reading last date
+            last_date = None
+
     start_date, end_date = get_date_range(last_date)
-    
+
     # Build the URL dynamically for each symbol
     data_url = f'https://www.mse.mk/en/stats/symbolhistory/{symbol}'
     driver.get(data_url)
-    
+
     # Wait for the "From Date" and "To Date" input fields to be present
     from_date_input = wait.until(EC.presence_of_element_located((By.ID, 'FromDate')))
     to_date_input = wait.until(EC.presence_of_element_located((By.ID, 'ToDate')))
-    
+
     # Clear the current value and set the new date range
     from_date_input.clear()
     from_date_input.send_keys(start_date)
     to_date_input.clear()
     to_date_input.send_keys(end_date)
-    
+
     # Wait for the "Submit" or "Search" button to be clickable before clicking it
     search_button = wait.until(EC.element_to_be_clickable((By.CLASS_NAME, 'btn-primary-sm')))
     search_button.click()
 
     # Wait for the results table to appear after the page reloads
     results_table = wait.until(EC.presence_of_element_located((By.ID, 'resultsTable_wrapper')))
-    
+
     # Get the page source after JavaScript has been executed
     soup = BeautifulSoup(driver.page_source, 'html.parser')
-    
+
     # Find the table containing historical data
     table = soup.find('div', {'id': 'resultsTable_wrapper'})
     
-    # Iterate over the rows and extract data
     if table:
+        headers = ['Date', 'Close Price', 'Max', 'Min', 'Avg Price', '% Change', 'Volume', 'Turnover Best', 'Total Turnover']
+        
+        # Iterate over the rows and extract data
         for row in table.find_all('tr')[1:]:  # Skip the header row
             columns = row.find_all('td')
-            if len(columns) > 2:  # Ensure there are enough columns
-                date = columns[0].text.strip()
-                close_price = columns[1].text.strip()
-                volume = columns[2].text.strip()
-                update_historical_data(symbol, date, close_price, volume)
-                print(f"{symbol} | {date} | {close_price} | {volume}")
+            if len(columns) == 9:  # Ensure there are exactly 9 columns
+                # Extract and map data from each column
+                date = columns[0].text.strip()  # Date is in the first column
+                close_price = columns[1].text.strip()  # Close Price in the second column
+                max_price = columns[2].text.strip()  # Max in the third column
+                min_price = columns[3].text.strip()  # Min in the fourth column
+                avg_price = columns[4].text.strip()  # Average Price in the fifth column
+                percent_change = columns[5].text.strip()  # % Change in the sixth column
+                volume = columns[6].text.strip()  # Volume in the seventh column
+                turnover_best = columns[7].text.strip()  # Turnover Best in the eighth column
+                total_turnover = columns[8].text.strip()  # Total Turnover in the last column
+
+                # Pack all data into a row for CSV
+                row_data = [date, close_price, max_price, min_price, avg_price, percent_change, volume, turnover_best, total_turnover]
+                
+                # Call the function to update the CSV file
+                update_historical_data(symbol, row_data, headers)
+                
+                # Print the extracted data for each row
+                print(f"{symbol} | {date} | {close_price} | {max_price} | {min_price} | {avg_price} | {percent_change} | {volume} | {turnover_best} | {total_turnover}")
     else:
         print(f"No historical data found for {symbol}")
 
@@ -169,3 +194,4 @@ merge_csv_files()
 
 # Close the browser once done
 driver.quit()
+
