@@ -4,5 +4,5 @@
 Code_optimized.txt final version
 # Contributors
 Ирена Станчева 211200<br>
-Леонид Минов 211277
+Леонид Минов 211277<br>
 Филип Василевски 203174
