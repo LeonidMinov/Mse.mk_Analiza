@@ -1,4 +1,4 @@
-"# DIZAJN PROEKT" 
+DIZAJN PROEKT 
 
 Needed technologies:
 1.Intelij
