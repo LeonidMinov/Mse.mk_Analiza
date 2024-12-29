@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Price Analysis</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <style>
+        body {
+            background-image: url('https://www.mse.mk/content/Images/header-bg.png'); /* Replace with your image URL */
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            font-family: 'Arial', sans-serif;
+        }
+        .card {
+            background-color: #f0f0f0;
+            border: 0.1px solid #2b3051;
+            border-radius: 10px;
+            transition: all 0.3s ease-in-out;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        .card:hover {
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.2);
+        }
+        .card h4 {
+            color: #2b3051;
+        }
+        h1 {
+            color: white;
+        }
+        .btn-primary {
+            background-color: #2b3051;
+            color: #fff;
+            border: none;
+        }
+        .btn-primary:hover {
+            background-color: #3a3f63;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            color: #fff;
+        }
+        .btn-secondary:hover {
+            background-color: #5a6268;
+        }
+        .btn-info {
+            background-color: #17a2b8;
+            color: #fff;
+        }
+        .btn-info:hover {
+            background-color: #138496;
+        }
+        .chart-wrapper {
+            margin: 20px auto;
+            max-width: 600px;
+        }
+        .feedback-message {
+            font-weight: 500;
+        }
+        .feedback-success {
+            color: #198754;
+        }
+        .feedback-error {
+            color: #dc3545;
+        }
+        footer {
+            margin-top: 50px;
+            font-size: 0.9rem;
+            text-align: center;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+<div th:insert="/layout/layout :: navbar"></div>
+<div class="container py-5">
+    <header class="text-center mb-4">
+        <h1>Stock Price Analysis</h1>
+    </header>
+
+    <!-- Dynamic Content -->
+    <div th:if="${companyData != null && !companyData.isEmpty()}">
+        <div class="row g-4" th:each="data : ${companyData}">
+            <div class="col-12">
+                <div class="card p-4">
+                    <h4 class="card-title text-center" th:text="${data.companyCode} + ' Price Overview'">Company Code</h4>
+                    <p class="text-center text-muted mb-3">
+                        Last Updated:
+                        <span th:text="${#temporals.format(data.lastUpdated, 'dd-MM-yyyy')}">Unknown</span>
+                    </p>
+                    <div class="d-flex flex-column flex-lg-row align-items-center justify-content-between">
+                        <!-- Chart -->
+                        <div class="chart-wrapper">
+                            <canvas th:attr="id='chart-' + ${data.id}" width="800" height="400"></canvas>
+                        </div>
+
+                        <!-- Controls -->
+                        <div class="d-flex flex-column align-items-center mt-4">
+                            <button class="btn btn-primary mb-3 analysis-btn w-100" th:attr="data-company-id=${data.id}">
+                                <i class="fas fa-chart-line me-2"></i>Technical Analysis
+                            </button>
+                            <button class="btn btn-secondary mb-3 sentiment-btn w-100" th:attr="data-company-id=${data.id}">
+                                <i class="fas fa-comments me-2"></i>Sentiment Analysis
+                            </button>
+                            <button class="btn btn-info predict-button w-100" th:attr="data-company-id=${data.id}">
+                                <i class="fas fa-calendar-alt me-2"></i>Predict Next Month
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Fallback for No Data -->
+    <div th:if="${companyData == null || companyData.isEmpty()}">
+        <div class="alert alert-warning text-center" role="alert">
+            No data available to display.
+        </div>
+    </div>
+</div>
+
+<footer>
+    <p>&copy; 2024 Your Company Name. All Rights Reserved.</p>
+</footer>
+
+<!-- JavaScript for Charts and Button Actions -->
+<script th:inline="javascript">
+    document.addEventListener('DOMContentLoaded', function () {
+        const companyData = /*[[${companyData}]]*/ [];
+
+        companyData.forEach(function (data) {
+            const ctx = document.getElementById("chart-" + data.id).getContext("2d");
+            new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels: data.dates || [],
+                    datasets: [{
+                        label: "Price",
+                        data: data.prices || [],
+                        borderColor: "#2b3051",
+                        borderWidth: 2,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: {
+                            type: "time",
+                            time: { unit: "day", tooltipFormat: "yyyy-MM-dd" }
+                        },
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        });
+
+        document.querySelectorAll(".analysis-btn").forEach(button => {
+            button.addEventListener("click", () => {
+                const companyId = button.getAttribute("data-company-id");
+                const feedbackElement = document.getElementById("prediction-" + companyId);
+
+                fetch(`/api/predict`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ companyId })
+                })
+                    .then(response => response.ok ? response.text() : Promise.reject("Error"))
+                    .then(signal => {
+                        feedbackElement.textContent = `Signal: ${signal}`;
+                        feedbackElement.className = "feedback-message feedback-success";
+                    })
+                    .catch(() => {
+                        feedbackElement.textContent = "Prediction unavailable.";
+                        feedbackElement.className = "feedback-message feedback-error";
+                    });
+            });
+        });
+    });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
